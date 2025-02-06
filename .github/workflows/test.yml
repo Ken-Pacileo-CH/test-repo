@@ -1,0 +1,116 @@
+# This workflow is designed and tested for use on GITHUB HOSTED large runner infrastructure as well as the Enterprise DevOps shared runner (label = ent-devops-shared-runner)
+
+name: Flake8 Python Scan
+
+on:
+  workflow_call:
+
+    inputs:
+      runner-labels:
+        type: string
+        description: Runner labels to use for job
+        default: GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram
+
+      create-pr-comment:
+        type: boolean
+        description: Determines if PR Comment with flake8 output will be created
+        default: false
+
+      python-version:
+        type: string
+        description: Python version to use
+        default: 3.13
+
+      path:
+        type: string
+        description: File Path where python files should be scanned - default is all files in the repo
+        default: ''
+
+      select-values:
+        type: string
+        description: What values to include with the flake8 --select parameter
+        default: E,W,F
+
+      max-line-length:
+        type: string
+        description: Maximum allowable line length in python code when executing flake8
+        default: 79
+
+      ignore-values:
+        type: string
+        description: Comma separated list of all codes to ignore i.e. F401,E223
+        default: ''
+jobs:
+
+  flake8-scan:
+    name: PEP 8 Scan
+    runs-on:
+      labels: ${{ inputs.runner-labels }}
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: install python packages
+        run: |
+          pip install --index-url https://cigna.jfrog.io/artifactory/api/pypi/pypi-repos/simple --trusted-host cigna.jfrog.io flake8
+        shell: bash
+
+      - name: run flake8 scan
+        id: run-flake8
+        run: |
+
+          # set ignore flag based on input
+          if [ "${{ inputs.ignore-values }}" == "" ]; then
+            IGNORE_FLAG=""
+          else
+            IGNORE_FLAG=--ignore=${{ inputs.ignore-values }}
+          fi
+
+          # execute flake8!
+          flake8 ${{ inputs.path }} \
+          --select=${{ inputs.select-values }} \
+          --count \
+          --show-source \
+          --statistics \
+          --max-line-length=${{ inputs.max-line-length }} \
+          --tee \
+          --output-file flake8_report.txt \
+          $IGNORE_FLAG
+        shell: bash
+
+      - name: direct flake8 results to workflow step summary
+        if: always()
+        run: |
+          echo "$(cat flake8_report.txt)" >> $GITHUB_STEP_SUMMARY
+        shell: bash
+
+      - name: Create PR Comment if input indicator is true
+        if: always() && inputs.create-pr-comment == true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const flake8Output = fs.readFileSync('flake8_report.txt', 'utf8');
+            
+            if (${{ steps.run-flake8.conclusion == 'success' }}) {
+              commentBody = '🔥 Flake8 Execution Successful!!! 🚀';
+            } else if (${{steps.run-flake8.conclusion == 'failure' }}) {
+              commentBody = `\`\`\`\n${flake8Output}\n\`\`\``;
+            }
+            
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
